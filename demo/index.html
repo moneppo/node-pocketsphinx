@@ -1,0 +1,50 @@
+<html>
+<head>
+	<script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+	<div id='output'>Speech shows up here</div>
+	<script>
+		navigator.getUserMedia = ( navigator.getUserMedia ||
+      navigator.webkitGetUserMedia ||
+      navigator.mozGetUserMedia ||
+      navigator.msGetUserMedia);
+
+		if (navigator.getUserMedia) {
+   		navigator.getUserMedia ({audio: true},
+      	function(localMediaStream) {
+      		audioContext = window.AudioContext || window.webkitAudioContext;
+    			context = new audioContext();
+    			audioInput = context.createMediaStreamSource(localMediaStream);
+ 
+      		var socket = io.connect('http://localhost:3000');
+
+      		socket.on('utterance', function(data) {
+      			document.getElementById('output').innerHTML = data.hyp;
+      		})
+
+      		var buffer = context.createBuffer(1, 2048, 16000);
+
+    			var streamer = (context.createScriptProcessor ||
+                 context.createJavaScriptNode).call(context, 2048, 1, 1);
+    			streamer.onaudioprocess = function(e){
+        		var data = e.inputBuffer.getChannelData(0);
+
+        		// upload a file to the server.
+		  			socket.emit('audio', data.buffer);
+		  		}
+
+		  		//audioInput.connect(buffer);
+		  		//buffer.connect(streamer);
+		  		audioInput.connect(streamer);
+		  		streamer.connect(context.destination);
+        },
+      	function(err) {
+         console.log("The following error occured: " + err);
+      	});
+		} else {
+   		console.log("getUserMedia not supported");
+		}
+	</script>
+</body>
+</html>

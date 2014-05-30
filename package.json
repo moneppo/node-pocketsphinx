@@ -1,0 +1,22 @@
+{
+  "name": "pocketsphinx",
+  "version": "0.0.1",
+  "description": "Node binding for continuous voice recoginition through pocketsphinx.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install": "node-gyp rebuild"
+  },
+  "keywords": [
+    "pocketsphinx",
+    "sphinx",
+    "voice"
+  ],
+  "author": "moneppo",
+  "license": "LGPL",
+  "gypfile": true,
+  "dependencies": {
+    "express": "~4.3.2",
+    "socket.io": "~1.0.2"
+  }
+}
