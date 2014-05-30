@@ -15,7 +15,6 @@ io.on('connection', function(socket){
 	});
 
   socket.on('audio', function(data) {
-  	console.log("audio data!");
     ps.write(data);
   });
 });

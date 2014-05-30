@@ -8,9 +8,11 @@
 
 using namespace v8;
 
-union byteToInt16 {
-    unsigned char char_buf[128];
-    int int_buf[64];
+
+enum CALIBRATION_STATE {
+  NOT_CALIBRATED,
+  CALIBRATING,
+  CALIBRATED
 };
 
 class PocketSphinx : node::ObjectWrap {
@@ -19,11 +21,14 @@ class PocketSphinx : node::ObjectWrap {
     ps_decoder_t* m_ps;
     int32 m_ts;
 
-    bool m_calibrated;
+    int m_calibrationState;
 
   public:
     PocketSphinx() {
+      printf("Initializing...");
+      fflush(stdout); 
       m_cont = cont_ad_init(NULL, NULL);
+      m_calibrationState = NOT_CALIBRATED;
     }
 
     ~PocketSphinx() {
@@ -77,6 +82,14 @@ class PocketSphinx : node::ObjectWrap {
       return result;
     }
 
+    static void Reset(PocketSphinx* instance) {
+      instance->m_ts = instance->m_cont->read_ts;
+      cont_ad_reset(instance->m_cont);
+      if (ps_start_utt(instance->m_ps, NULL) < 0) {
+        // error
+      }  
+    }
+
     static Handle<Value> Process(const Arguments& args) {
       v8::HandleScope scope;
 
@@ -89,21 +102,36 @@ class PocketSphinx : node::ObjectWrap {
 
       PocketSphinx* instance = node::ObjectWrap::Unwrap<PocketSphinx>(args.This());
 
-      if (!instance->m_calibrated) {
-        int32 result = cont_ad_calib_loop(instance->m_cont, bufferData, bufferLength);
-        if (result < 0) {
-          return scope.Close(Die("Silence calibration failed"));
-        }
-
-        if (result == 0) {
-          instance->m_calibrated = true;
-          instance->m_ts = instance->m_cont->read_ts;
-          
-          if (ps_start_utt(instance->m_ps, NULL) < 0) {
-            return scope.Close(Die("Couldn't start a new utterance"));
-          }  
-          return scope.Close(Object::New());
-        }
+      int32 result = 0;
+      switch(instance->m_calibrationState) {
+        case NOT_CALIBRATED:
+          instance->m_calibrationState = CALIBRATING;
+          Reset(instance);
+          printf("Starting calibration...");
+          fflush(stdout); 
+          result = cont_ad_calib_loop(instance->m_cont, bufferData, bufferLength);
+          if (result < 0) {
+            return scope.Close(Die("Silence calibration failed"));
+          }
+          if (result == 0) {
+            printf("Calibration complete");
+            fflush(stdout); 
+            instance->m_calibrationState = CALIBRATED;
+            Reset(instance);
+            return scope.Close(Object::New());
+          }
+        case CALIBRATING:
+          result = cont_ad_calib_loop(instance->m_cont, bufferData, bufferLength);
+          if (result < 0) {
+            return scope.Close(Die("Silence calibration failed"));
+          }
+          if (result == 0) {
+            printf("Calibration complete");
+            fflush(stdout); 
+            instance->m_calibrationState = CALIBRATED;
+            Reset(instance);
+            return scope.Close(Object::New());
+          }
       }
 
       int32 k = cont_ad_read(instance->m_cont, bufferData, bufferLength);
@@ -127,13 +155,7 @@ class PocketSphinx : node::ObjectWrap {
           result->Set(String::NewSymbol("utterance"), String::NewSymbol(uttid));
           result->Set(String::NewSymbol("score"), NumberObject::New(score));
 
-          // We start again. Reset the clock, the silence detection, 
-          // and start a new utterance
-          instance->m_ts = instance->m_cont->read_ts;
-          cont_ad_reset(instance->m_cont);
-          if (ps_start_utt(instance->m_ps, NULL) < 0) {
-            return scope.Close(Die("Couldn't start a new utterance"));
-          }  
+          Reset(instance);
 
           return scope.Close(result);
         }
