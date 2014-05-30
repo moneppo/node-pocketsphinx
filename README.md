@@ -13,7 +13,7 @@ pocketsphinx requires [CMU's Pocket Sphinx libraries](http://cmusphinx.sourcefor
 Usage
 -----
 
-A `PocketSphinx` object is a writable stream that accepts 16 kHz 16-bit PCM data. When an utterance is detected, e.g. a phrase, word, or statement, the object emits an `utterance` event with the details of the detected utterance.
+A `PocketSphinx` object is a writable stream that accepts mono 16 kHz 16-bit PCM data. When an utterance is detected, e.g. a phrase, word, or statement, the object emits an `utterance` event with the details of the detected utterance.
 
     var PocketSphinx = require('pocketsphinx');
     
