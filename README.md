@@ -1,4 +1,4 @@
-*Note: This library doesn't work properly yet. There is a resampling issue currently that will mke the system simply output gibberish. We're getting there, thought*
+*Note: This library doesn't work properly yet. There is a resampling issue currently that will mke the system simply output gibberish. We're getting there, though.*
 
 pocketsphinx
 ============
