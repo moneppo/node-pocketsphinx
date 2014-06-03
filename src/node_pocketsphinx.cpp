@@ -5,7 +5,6 @@
 #include <pocketsphinx.h>
 #include <sphinxbase/err.h>
 #include <sphinxbase/cont_ad.h>
-#include "samplerate.h"
 
 using namespace v8;
 
@@ -64,6 +63,8 @@ class PocketSphinx : node::ObjectWrap {
       v8::String::AsciiValue hmmValue(options->Get(String::NewSymbol("hmm")));
       v8::String::AsciiValue lmValue(options->Get(String::NewSymbol("lm")));
       v8::String::AsciiValue dictValue(options->Get(String::NewSymbol("dict")));
+      v8::String::AsciiValue samprateValue(options->Get(String::NewSymbol("samprate")));
+      v8::String::AsciiValue nfftValue(options->Get(String::NewSymbol("nfft")));
 
       PocketSphinx* instance = new PocketSphinx();
 
@@ -71,6 +72,8 @@ class PocketSphinx : node::ObjectWrap {
                  "-hmm", *hmmValue,
                  "-lm", *lmValue,
                  "-dict", *dictValue,
+                 "-samprate", *samprateValue,
+                 "-nfft", *nfftValue,
                  NULL);
 
       instance->m_ps = ps_init(config);
@@ -83,6 +86,7 @@ class PocketSphinx : node::ObjectWrap {
       instance->m_ts = instance->m_cont->read_ts;
      // cont_ad_reset(instance->m_cont);
       if (ps_start_utt(instance->m_ps, NULL) < 0) {
+        printf("Error starting utterance.\n");
         return FAILED;
       }  
 
@@ -166,38 +170,26 @@ class PocketSphinx : node::ObjectWrap {
       float*        bufferData   = (float*) node::Buffer::Data(args[0]);
       size_t        bufferLength = node::Buffer::Length(args[0]) / sizeof(float);
 
-      // First, we need to downsample to the 16 kHz sample ratepocketsphinx needs for the 
-      // language models most commonly used.
-      SRC_DATA srcData;
-      srcData.src_ratio = (double) 44100 / (double) DEFAULT_SAMPLES_PER_SEC;
-      srcData.output_frames = bufferLength * srcData.src_ratio;
-      srcData.data_in = bufferData;
-      srcData.data_out = new float[srcData.output_frames];
-      srcData.input_frames = bufferLength;
-
-      int result = src_simple(&srcData, SRC_SINC_MEDIUM_QUALITY, 1);
-      // Now we convert to int16
-      int16* downsampled = new int16[srcData.output_frames];
-      for (int i = 0; i < srcData.output_frames; i++) {
-        downsampled[i] = srcData.data_out[i] * 32768;
+      int16* downsampled = new int16[bufferLength];
+      for (int i = 0; i < bufferLength; i++) {
+        downsampled[i] = bufferData[i] * 32768;
       }
-      delete [] srcData.data_out;
 
       // Here is our state machine code.
       switch(instance->m_state) {
         case CALIBRATING:
           printf("Calibrating...\n");
-          instance->m_state = Calibrate(instance, downsampled, srcData.output_frames);
+          instance->m_state = Calibrate(instance, downsampled, bufferLength);
           break;
         case RESETTING:
           printf("Resetting...\n");
           instance->m_state = Reset(instance);
         case WAITING:
-          instance->m_state = WaitForAudio(instance, downsampled, srcData.output_frames);
+          instance->m_state = WaitForAudio(instance, downsampled, bufferLength);
           break;
         case LISTENING:
           printf("Listening...\n");
-          instance->m_state = Listen(instance, downsampled, srcData.output_frames);
+          instance->m_state = Listen(instance, downsampled, bufferLength);
           break;
         case PROCESSING:
           printf("Processing...\n");

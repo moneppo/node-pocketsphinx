@@ -13,15 +13,13 @@ var PocketSphinx = function(options) {
 		path = ('' + path).trim();
 		console.log(path + '/hmm/en_US/hub4wsj_sc_8k');
 		options.hmm = options.hmm || (path + '/hmm/en_US/hub4wsj_sc_8k');
-	//	options.lm = options.lm || (path +  '/lm/en_US/hub4.5000.DMP');
-  //  options.dict = options.dict || (path + '/lm/en_US/cmu07a.dic');
-   
-		options.lm = options.lm || (path +  "/lm/en/turtle.DMP");
-		options.dict = options.dict || (path + "/lm/en/turtle.dic");
-
+		options.lm = options.lm || (path +  '/lm/en_US/hub4.5000.DMP');
+    	options.dict = options.dict || (path + '/lm/en_US/cmu07a.dic');
+    	options.samprate = '' + (options.samprate || 44100);
+    	options.nfft = '' + (options.nfft || 1024);
     	// TODO: provide additional defaults
 
-    self._binding = new binding.pocketSphinxBinding(options);
+    	self._binding = new binding.pocketSphinxBinding(options);
 	});
 }
 
