@@ -1,3 +1,5 @@
+*Note: This library doesn't work properly yet. There is a resampling issue currently that will mke the system simply output gibberish. We're getting there, thought*
+
 pocketsphinx
 ============
 
@@ -27,7 +29,7 @@ A `PocketSphinx` object is a writable stream that accepts mono 16 kHz 16-bit PCM
     
     ps.write(myMicrophoneData);
     
-Data can be retrieved from files, but the demo shows how to use getUserMedia and Socket.io to stream data from a web frontend. This is also a good demo of how to use these new and somewhat poorly documented APIs for cool stuff.
+Data can be retrieved from files, but the demo shows how to use getUserMedia and Socket.io to stream data from a web frontend. This is also a good demo of how to use getUserMedia for cool stuff, considering the documentation for it is a little sparse.
 
 Notes
 -----
