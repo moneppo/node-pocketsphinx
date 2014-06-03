@@ -5,14 +5,18 @@
 #include <pocketsphinx.h>
 #include <sphinxbase/err.h>
 #include <sphinxbase/cont_ad.h>
+#include "samplerate.h"
 
 using namespace v8;
 
 
-enum CALIBRATION_STATE {
-  NOT_CALIBRATED,
+enum STATE {
   CALIBRATING,
-  CALIBRATED
+  RESETTING,
+  WAITING,
+  LISTENING,
+  PROCESSING,
+  FAILED
 };
 
 class PocketSphinx : node::ObjectWrap {
@@ -21,14 +25,14 @@ class PocketSphinx : node::ObjectWrap {
     ps_decoder_t* m_ps;
     int32 m_ts;
 
-    int m_calibrationState;
+    int m_state;
 
   public:
     PocketSphinx() {
       printf("Initializing...");
       fflush(stdout); 
       m_cont = cont_ad_init(NULL, NULL);
-      m_calibrationState = NOT_CALIBRATED;
+      m_state = CALIBRATING;
     }
 
     ~PocketSphinx() {
@@ -75,98 +79,150 @@ class PocketSphinx : node::ObjectWrap {
       return scope.Close(args.This());
     }
 
-    static Local<Object> Die(const char* error) {
-      Local<Object> result = Object::New();
-      result->Set(String::NewSymbol("error"), String::NewSymbol(error));
+    static int Reset(PocketSphinx* instance) {
+      instance->m_ts = instance->m_cont->read_ts;
+     // cont_ad_reset(instance->m_cont);
+      if (ps_start_utt(instance->m_ps, NULL) < 0) {
+        return FAILED;
+      }  
 
-      return result;
+      return WAITING;
     }
 
-    static void Reset(PocketSphinx* instance) {
-      instance->m_ts = instance->m_cont->read_ts;
-      cont_ad_reset(instance->m_cont);
-      if (ps_start_utt(instance->m_ps, NULL) < 0) {
-        // error
-      }  
+    static int Calibrate(PocketSphinx* instance, int16* buffer, size_t length) {
+      int result = cont_ad_calib_loop(instance->m_cont, buffer, length);
+
+      if (result < 0) {
+        printf("Error calibrating.\n");
+        return FAILED;
+      }
+
+      if (result == 0) {
+        printf("Calibration complete.\n");
+        return RESETTING;
+      }
+
+      return CALIBRATING;
+    }
+
+    static int WaitForAudio(PocketSphinx* instance, int16* buffer, size_t length) {
+      int32 k = cont_ad_read(instance->m_cont, buffer, length); 
+
+      if (k < 0) {
+        printf("Error clipping silence.\n");
+        return FAILED;
+      }
+
+      if (k > 0) {
+        ps_process_raw(instance->m_ps, buffer, k, FALSE, FALSE);
+        instance->m_ts = instance->m_cont->read_ts;
+        return LISTENING;
+      }
+
+      return WAITING;
+    }
+
+    static int Listen(PocketSphinx* instance, int16* buffer, size_t length) {
+      int32 k = cont_ad_read(instance->m_cont, buffer, length); 
+
+      if (k < 0) {
+        printf("Error clipping silence.\n");
+        return FAILED;
+      }
+
+      if (k > 0) {
+        printf("heard something.\n");
+        ps_process_raw(instance->m_ps, buffer, k, FALSE, FALSE);
+        instance->m_ts = instance->m_cont->read_ts;
+
+        return LISTENING;
+      }
+
+      if (instance->m_cont->read_ts - instance->m_ts > DEFAULT_SAMPLES_PER_SEC) {
+        printf("okay heard you.\n");
+        // Done collecting utterance. Guess the sentence send it to the callback.
+        ps_end_utt(instance->m_ps);
+        return PROCESSING;
+      }
+
+      return LISTENING;
     }
 
     static Handle<Value> Process(const Arguments& args) {
       v8::HandleScope scope;
-
-      if (!node::Buffer::HasInstance(args[0])) {
-        return scope.Close(Die("Argument must be a buffer."));
-      }
-
-      int16*        bufferData   = (int16*) node::Buffer::Data(args[0]);
-      size_t        bufferLength = node::Buffer::Length(args[0]) / sizeof(int16);
-
+      Local<Object> output = Object::New();
       PocketSphinx* instance = node::ObjectWrap::Unwrap<PocketSphinx>(args.This());
 
-      int32 result = 0;
-      switch(instance->m_calibrationState) {
-        case NOT_CALIBRATED:
-          instance->m_calibrationState = CALIBRATING;
-          Reset(instance);
-          printf("Starting calibration...");
-          fflush(stdout); 
-          result = cont_ad_calib_loop(instance->m_cont, bufferData, bufferLength);
-          if (result < 0) {
-            return scope.Close(Die("Silence calibration failed"));
-          }
-          if (result == 0) {
-            printf("Calibration complete");
-            fflush(stdout); 
-            instance->m_calibrationState = CALIBRATED;
-            Reset(instance);
-            return scope.Close(Object::New());
-          }
+      if (instance->m_state == FAILED) {
+        output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
+        return scope.Close(output);
+      }
+
+      if (!node::Buffer::HasInstance(args[0])) {
+        output->Set(String::NewSymbol("error"), String::NewSymbol("Argument must be a buffer."));
+        return scope.Close(output);
+      }
+
+      float*        bufferData   = (float*) node::Buffer::Data(args[0]);
+      size_t        bufferLength = node::Buffer::Length(args[0]) / sizeof(float);
+
+      // First, we need to downsample to the 16 kHz sample ratepocketsphinx needs for the 
+      // language models most commonly used.
+      SRC_DATA srcData;
+      srcData.src_ratio = (double) 44100 / (double) DEFAULT_SAMPLES_PER_SEC;
+      srcData.output_frames = bufferLength * srcData.src_ratio;
+      srcData.data_in = bufferData;
+      srcData.data_out = new float[srcData.output_frames];
+      srcData.input_frames = bufferLength;
+
+      int result = src_simple(&srcData, SRC_SINC_MEDIUM_QUALITY, 1);
+      // Now we convert to int16
+      int16* downsampled = new int16[srcData.output_frames];
+      for (int i = 0; i < srcData.output_frames; i++) {
+        downsampled[i] = srcData.data_out[i] * 32768;
+      }
+      delete [] srcData.data_out;
+
+      // Here is our state machine code.
+      switch(instance->m_state) {
         case CALIBRATING:
-          result = cont_ad_calib_loop(instance->m_cont, bufferData, bufferLength);
-          if (result < 0) {
-            return scope.Close(Die("Silence calibration failed"));
+          printf("Calibrating...\n");
+          instance->m_state = Calibrate(instance, downsampled, srcData.output_frames);
+          break;
+        case RESETTING:
+          printf("Resetting...\n");
+          instance->m_state = Reset(instance);
+        case WAITING:
+          instance->m_state = WaitForAudio(instance, downsampled, srcData.output_frames);
+          break;
+        case LISTENING:
+          printf("Listening...\n");
+          instance->m_state = Listen(instance, downsampled, srcData.output_frames);
+          break;
+        case PROCESSING:
+          printf("Processing...\n");
+          {
+            const char* uttid;
+            int32       score;
+            const char* hyp = ps_get_hyp(instance->m_ps, &score, &uttid);
+
+            printf("Hyp: %s\n", hyp);
+            output->Set(String::NewSymbol("hyp"), String::NewSymbol(hyp));
+            output->Set(String::NewSymbol("utterance"), String::NewSymbol(uttid));
+            output->Set(String::NewSymbol("score"), NumberObject::New(score));
+            instance->m_state = RESETTING;
           }
-          if (result == 0) {
-            printf("Calibration complete");
-            fflush(stdout); 
-            instance->m_calibrationState = CALIBRATED;
-            Reset(instance);
-            return scope.Close(Object::New());
-          }
+          break;
       }
 
-      int32 k = cont_ad_read(instance->m_cont, bufferData, bufferLength);
+      delete [] downsampled;
 
-      if (k < 0) {
-        return scope.Close(Die("Silence clipping encountered an error"));
+      if (instance->m_state == FAILED) {
+        output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
       }
 
-      // k==0 means the buffer had silence. Was it longer than a second?
-      if (k == 0) {
-        if (instance->m_cont->read_ts - instance->m_ts > DEFAULT_SAMPLES_PER_SEC) {
-
-          // Done collecting utterance. Guess the sentence send it to the callback.
-          ps_end_utt(instance->m_ps);
-          const char* uttid;
-          int32       score;
-          const char* hyp = ps_get_hyp(instance->m_ps, &score, &uttid);
-
-          Local<Object> result = Object::New();
-          result->Set(String::NewSymbol("hyp"), String::NewSymbol(hyp));
-          result->Set(String::NewSymbol("utterance"), String::NewSymbol(uttid));
-          result->Set(String::NewSymbol("score"), NumberObject::New(score));
-
-          Reset(instance);
-
-          return scope.Close(result);
-        }
-      } else {
-        ps_process_raw(instance->m_ps, bufferData, k, FALSE, FALSE);
-        instance->m_ts = instance->m_cont->read_ts;
-      }
-
-      return scope.Close(Object::New());
+      return scope.Close(output);
     }
-
 };
 
 
