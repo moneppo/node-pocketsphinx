@@ -1,5 +1,3 @@
-*Note: This library doesn't work properly yet. There is a resampling issue currently that will make the system simply output gibberish. We're getting there, though.*
-
 pocketsphinx
 ============
 
