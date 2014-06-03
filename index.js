@@ -16,7 +16,7 @@ var PocketSphinx = function(options) {
 		options.lm = options.lm || (path +  '/lm/en_US/hub4.5000.DMP');
     	options.dict = options.dict || (path + '/lm/en_US/cmu07a.dic');
     	options.samprate = '' + (options.samprate || 44100);
-    	options.nfft = '' + (options.nfft || 1024);
+    	options.nfft = '' + (options.nfft || 2048);
     	// TODO: provide additional defaults
 
     	self._binding = new binding.pocketSphinxBinding(options);
