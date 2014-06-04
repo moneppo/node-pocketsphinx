@@ -5,6 +5,7 @@
 #include <pocketsphinx.h>
 #include <sphinxbase/err.h>
 #include <sphinxbase/cont_ad.h>
+#include <uv.h>
 
 using namespace v8;
 
@@ -23,8 +24,16 @@ class PocketSphinx : node::ObjectWrap {
     cont_ad_t* m_cont;
     ps_decoder_t* m_ps;
     int32 m_ts;
-
+    Persistent<Function> m_callback;
     int m_state;
+    uv_loop_t *m_loop;
+
+    struct process_baton {
+      uv_work_t* req;
+      PocketSphinx* instance;
+      size_t length;
+      float* data;
+    };
 
   public:
     PocketSphinx() {
@@ -37,6 +46,7 @@ class PocketSphinx : node::ObjectWrap {
     ~PocketSphinx() {
       cont_ad_close(m_cont);
       ps_free(m_ps);
+      m_callback.Dispose();
     }
 
     static v8::Persistent<FunctionTemplate> persistent_function_template;
@@ -50,7 +60,7 @@ class PocketSphinx : node::ObjectWrap {
       PocketSphinx::persistent_function_template->InstanceTemplate()->SetInternalFieldCount(1); 
       PocketSphinx::persistent_function_template->SetClassName(v8::String::NewSymbol("PocketSphinx"));
 
-      NODE_SET_PROTOTYPE_METHOD(PocketSphinx::persistent_function_template, "process", Process);
+      NODE_SET_PROTOTYPE_METHOD(PocketSphinx::persistent_function_template, "writeData", WriteData);
       
       target->Set(String::NewSymbol("pocketSphinxBinding"), PocketSphinx::persistent_function_template->GetFunction());
     }
@@ -68,6 +78,8 @@ class PocketSphinx : node::ObjectWrap {
 
       PocketSphinx* instance = new PocketSphinx();
 
+      instance->m_callback = Persistent<Function>::New(Local<Function>::Cast(args[1]));
+
       cmd_ln_t* config = cmd_ln_init(NULL, ps_args(), TRUE,
                  "-hmm", *hmmValue,
                  "-lm", *lmValue,
@@ -77,6 +89,8 @@ class PocketSphinx : node::ObjectWrap {
                  NULL);
 
       instance->m_ps = ps_init(config);
+
+      instance->m_loop = uv_default_loop();
 
       instance->Wrap(args.This());
       return scope.Close(args.This());
@@ -152,24 +166,51 @@ class PocketSphinx : node::ObjectWrap {
       return LISTENING;
     }
 
-    static Handle<Value> Process(const Arguments& args) {
+    static Handle<Value> WriteData(const Arguments& args) {
       v8::HandleScope scope;
-      Local<Object> output = Object::New();
       PocketSphinx* instance = node::ObjectWrap::Unwrap<PocketSphinx>(args.This());
+
+      if (!node::Buffer::HasInstance(args[0])) {
+        Local<Object> output;
+        output->Set(String::NewSymbol("error"), String::NewSymbol("Argument must be a buffer."));
+        Local<Value> argv[1] = { output };
+        instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
+        return scope.Close(Undefined());
+      }
+
+      uv_work_t req;
+      process_baton* baton = new process_baton();
+
+      baton->req = &req;
+      baton->instance = instance;
+      baton->data = (float*) node::Buffer::Data(args[0]);
+      baton->length = node::Buffer::Length(args[0]) / sizeof(float);
+      req.data = (void*) baton;
+
+      uv_queue_work(instance->m_loop, &req, Process, AfterProcess);
+      uv_run(instance->m_loop, UV_RUN_DEFAULT);
+  
+      return scope.Close(Undefined());
+    }
+
+    static void AfterProcess(uv_work_t* req, int status) {
+      process_baton *baton = (process_baton*) req->data;
+      delete baton;
+    }
+
+    static void Process(uv_work_t* req) {
+      PocketSphinx* instance = ((process_baton*) req->data)->instance;     
+      Local<Object> output;
+      float* bufferData = ((process_baton*) req->data)->data;
+      size_t bufferLength = ((process_baton*) req->data)->length;
 
       if (instance->m_state == FAILED) {
         output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
-        return scope.Close(output);
+        Local<Value> argv[1] = { output };
+        instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
+        return;
       }
-
-      if (!node::Buffer::HasInstance(args[0])) {
-        output->Set(String::NewSymbol("error"), String::NewSymbol("Argument must be a buffer."));
-        return scope.Close(output);
-      }
-
-      float*        bufferData   = (float*) node::Buffer::Data(args[0]);
-      size_t        bufferLength = node::Buffer::Length(args[0]) / sizeof(float);
-
+      
       int16* downsampled = new int16[bufferLength];
       for (int i = 0; i < bufferLength; i++) {
         downsampled[i] = bufferData[i] * 32768;
@@ -202,6 +243,8 @@ class PocketSphinx : node::ObjectWrap {
             output->Set(String::NewSymbol("hyp"), String::NewSymbol(hyp));
             output->Set(String::NewSymbol("utterance"), String::NewSymbol(uttid));
             output->Set(String::NewSymbol("score"), NumberObject::New(score));
+            Local<Value> argv[1] = { output };
+            instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
             instance->m_state = RESETTING;
           }
           break;
@@ -211,9 +254,9 @@ class PocketSphinx : node::ObjectWrap {
 
       if (instance->m_state == FAILED) {
         output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
+        Local<Value> argv[1] = { output };
+        instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
       }
-
-      return scope.Close(output);
     }
 };
 

@@ -6,6 +6,16 @@ var spawn = require('child_process').spawn;
 
 
 var PocketSphinx = function(options) {
+
+	var callback = function(result) {
+		if (result.error) {
+			this.emit("error", result.error);
+			return;
+		}
+
+		this.emit('utterance', result.hyp, result.utterance, result.score);
+	}
+
 	var self = this;
 	var pkgconfig = spawn('pkg-config', ['--variable=modeldir', 'pocketsphinx']);
 	pkgconfig.stdout.on('data', function(path) {
@@ -19,25 +29,19 @@ var PocketSphinx = function(options) {
     	options.nfft = '' + (options.nfft || 2048);
     	// TODO: provide additional defaults
 
-    	self._binding = new binding.pocketSphinxBinding(options);
+    	self._binding = new binding.pocketSphinxBinding(options, callback);
 	});
 }
 
 util.inherits(PocketSphinx, stream.Writable);
 
-PocketSphinx.prototype.write = function(chunk, encoding, callback) {
+PocketSphinx.prototype.write = function(chunk) {
 	if (!this._binding) {
 		if (callback) callback('PocketSphinx not yet initialized');
 		return;
 	}
 
-  var result = this._binding.process(chunk);
-  if (result.error) {
-  	if (callback)  callback(result.error);
-  } else if (result.hyp) {
-  	this.emit('utterance', result.hyp, result.utterance, result.score);
-  	if (callback) callback();
-  }
+  this._binding.writeData(chunk);
 };
 
 module.exports = PocketSphinx;
