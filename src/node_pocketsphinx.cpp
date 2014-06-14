@@ -79,7 +79,7 @@ class PocketSphinx : node::ObjectWrap {
       PocketSphinx* instance = new PocketSphinx();
 
       instance->m_callback = Persistent<Function>::New(Local<Function>::Cast(args[1]));
-
+      printf("r\n");
       cmd_ln_t* config = cmd_ln_init(NULL, ps_args(), TRUE,
                  "-hmm", *hmmValue,
                  "-lm", *lmValue,
@@ -89,8 +89,7 @@ class PocketSphinx : node::ObjectWrap {
                  NULL);
 
       instance->m_ps = ps_init(config);
-
-      instance->m_loop = uv_default_loop();
+      instance->m_loop = uv_loop_new();
 
       instance->Wrap(args.This());
       return scope.Close(args.This());
@@ -171,7 +170,7 @@ class PocketSphinx : node::ObjectWrap {
       PocketSphinx* instance = node::ObjectWrap::Unwrap<PocketSphinx>(args.This());
 
       if (!node::Buffer::HasInstance(args[0])) {
-        Local<Object> output;
+        Local<Object> output = Object::New();
         output->Set(String::NewSymbol("error"), String::NewSymbol("Argument must be a buffer."));
         Local<Value> argv[1] = { output };
         instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
@@ -188,8 +187,6 @@ class PocketSphinx : node::ObjectWrap {
       req.data = (void*) baton;
 
       uv_queue_work(instance->m_loop, &req, Process, AfterProcess);
-      uv_run(instance->m_loop, UV_RUN_DEFAULT);
-  
       return scope.Close(Undefined());
     }
 
@@ -200,7 +197,7 @@ class PocketSphinx : node::ObjectWrap {
 
     static void Process(uv_work_t* req) {
       PocketSphinx* instance = ((process_baton*) req->data)->instance;     
-      Local<Object> output;
+      Local<Object> output;// = Object::New();
       float* bufferData = ((process_baton*) req->data)->data;
       size_t bufferLength = ((process_baton*) req->data)->length;
 
@@ -219,21 +216,22 @@ class PocketSphinx : node::ObjectWrap {
       // Here is our state machine code.
       switch(instance->m_state) {
         case CALIBRATING:
-          printf("Calibrating...\n");
+          printf("calibrating...\n");
           instance->m_state = Calibrate(instance, downsampled, bufferLength);
           break;
         case RESETTING:
-          printf("Resetting...\n");
+          printf("resetting...\n");
           instance->m_state = Reset(instance);
         case WAITING:
+          printf("waiting...\n");
           instance->m_state = WaitForAudio(instance, downsampled, bufferLength);
           break;
         case LISTENING:
-          printf("Listening...\n");
+          printf("listening...\n");
           instance->m_state = Listen(instance, downsampled, bufferLength);
           break;
         case PROCESSING:
-          printf("Processing...\n");
+          printf("processing...\n");
           {
             const char* uttid;
             int32       score;

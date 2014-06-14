@@ -36,12 +36,9 @@ var PocketSphinx = function(options) {
 util.inherits(PocketSphinx, stream.Writable);
 
 PocketSphinx.prototype.write = function(chunk) {
-	if (!this._binding) {
-		if (callback) callback('PocketSphinx not yet initialized');
-		return;
+	if (this._binding) {
+		this._binding.writeData(chunk);
 	}
-
-  this._binding.writeData(chunk);
 };
 
 module.exports = PocketSphinx;

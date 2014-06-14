@@ -9,7 +9,6 @@ app.get('/', function(req, res){
 
 io.on('connection', function(socket){
 	var ps = new PocketSphinx();
-
 	ps.on('utterance', function(hyp, utt, score) {
 		socket.emit('utterance', {hyp: hyp, utterance: utt, score:score});
 	});
