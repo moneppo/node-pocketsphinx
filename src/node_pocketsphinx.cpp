@@ -6,8 +6,10 @@
 #include <sphinxbase/err.h>
 #include <sphinxbase/cont_ad.h>
 #include <uv.h>
+#include <vector>
 
 using namespace v8;
+using namespace std;
 
 
 enum STATE {
@@ -26,14 +28,17 @@ class PocketSphinx : node::ObjectWrap {
     int32 m_ts;
     Persistent<Function> m_callback;
     int m_state;
-    uv_loop_t *m_loop;
+    bool stop;
 
-    struct process_baton {
-      uv_work_t* req;
-      PocketSphinx* instance;
+    struct Data {
       size_t length;
       float* data;
     };
+
+    uv_cond_t cv;
+    uv_mutex_t mutex;
+    uv_thread_t work_thread;
+    vector<Data*> queue;
 
   public:
     PocketSphinx() {
@@ -41,11 +46,20 @@ class PocketSphinx : node::ObjectWrap {
       fflush(stdout); 
       m_cont = cont_ad_init(NULL, NULL);
       m_state = CALIBRATING;
+      stop = false;
+      uv_mutex_init(&mutex);
+      uv_cond_init(&cv);
+
+      uv_thread_create(&work_thread, Thread, this);
     }
 
     ~PocketSphinx() {
       cont_ad_close(m_cont);
       ps_free(m_ps);
+      stop = true;
+      uv_thread_join(&work_thread);
+      uv_mutex_destroy(&mutex);
+      uv_cond_destroy(&cv);
       m_callback.Dispose();
     }
 
@@ -89,7 +103,6 @@ class PocketSphinx : node::ObjectWrap {
                  NULL);
 
       instance->m_ps = ps_init(config);
-      instance->m_loop = uv_loop_new();
 
       instance->Wrap(args.This());
       return scope.Close(args.This());
@@ -131,6 +144,7 @@ class PocketSphinx : node::ObjectWrap {
       }
 
       if (k > 0) {
+        printf("processing...\n");
         ps_process_raw(instance->m_ps, buffer, k, FALSE, FALSE);
         instance->m_ts = instance->m_cont->read_ts;
         return LISTENING;
@@ -165,10 +179,40 @@ class PocketSphinx : node::ObjectWrap {
       return LISTENING;
     }
 
+    static void Thread(void* data) {
+      PocketSphinx* instance = (PocketSphinx*) data;
+      vector<Data*> consumer_work;
+      while(!instance->stop) {
+        uv_mutex_lock(&instance->mutex);
+      
+        while(instance->queue.size() == 0) { 
+          uv_cond_wait(&instance->cv, &instance->mutex);
+        }
+   
+        std::copy(instance->queue.begin(), 
+                  instance->queue.end(), 
+                  std::back_inserter(consumer_work));
+        instance->queue.clear();
+        
+        uv_mutex_unlock(&instance->mutex);
+     
+        for(vector<Data*>::iterator it = consumer_work.begin(); it != consumer_work.end(); ++it) {
+          Data* data = *it;   
+          Process(data, instance);  
+          printf("Deleting.");
+          delete data;
+          printf("Made it.");
+          data = NULL;
+        }    
+        consumer_work.clear();
+  }
+}
+
     static Handle<Value> WriteData(const Arguments& args) {
       v8::HandleScope scope;
       PocketSphinx* instance = node::ObjectWrap::Unwrap<PocketSphinx>(args.This());
-
+      
+      
       if (!node::Buffer::HasInstance(args[0])) {
         Local<Object> output = Object::New();
         output->Set(String::NewSymbol("error"), String::NewSymbol("Argument must be a buffer."));
@@ -176,59 +220,55 @@ class PocketSphinx : node::ObjectWrap {
         instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
         return scope.Close(Undefined());
       }
+      
 
-      uv_work_t req;
-      process_baton* baton = new process_baton();
+      Data* data = new Data();
+      data->data = (float*) node::Buffer::Data(args[0]);
+      data->length = node::Buffer::Length(args[0]) / sizeof(float);
+ 
+      uv_mutex_lock(&instance->mutex);
+      {
+        instance->queue.push_back(data);
+      }
+      uv_cond_signal(&instance->cv);
+      uv_mutex_unlock(&instance->mutex);
 
-      baton->req = &req;
-      baton->instance = instance;
-      baton->data = (float*) node::Buffer::Data(args[0]);
-      baton->length = node::Buffer::Length(args[0]) / sizeof(float);
-      req.data = (void*) baton;
-
-      uv_queue_work(instance->m_loop, &req, Process, AfterProcess);
       return scope.Close(Undefined());
+
     }
 
-    static void AfterProcess(uv_work_t* req, int status) {
-      process_baton *baton = (process_baton*) req->data;
-      delete baton;
-    }
-
-    static void Process(uv_work_t* req) {
-      PocketSphinx* instance = ((process_baton*) req->data)->instance;     
-      Local<Object> output;// = Object::New();
-      float* bufferData = ((process_baton*) req->data)->data;
-      size_t bufferLength = ((process_baton*) req->data)->length;
+    static void Process(Data* buffer, PocketSphinx* instance) { 
+      printf("Processing...\n");  
 
       if (instance->m_state == FAILED) {
+        Local<Object> output = Object::New();
         output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
         Local<Value> argv[1] = { output };
         instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);
         return;
       }
       
-      int16* downsampled = new int16[bufferLength];
-      for (int i = 0; i < bufferLength; i++) {
-        downsampled[i] = bufferData[i] * 32768;
+      int16* downsampled = new int16[buffer->length];
+      for (int i = 0; i < buffer->length; i++) {
+        downsampled[i] = buffer->data[i] * 32768;
       }
 
       // Here is our state machine code.
       switch(instance->m_state) {
         case CALIBRATING:
           printf("calibrating...\n");
-          instance->m_state = Calibrate(instance, downsampled, bufferLength);
+          instance->m_state = Calibrate(instance, downsampled, buffer->length);
           break;
         case RESETTING:
           printf("resetting...\n");
           instance->m_state = Reset(instance);
         case WAITING:
           printf("waiting...\n");
-          instance->m_state = WaitForAudio(instance, downsampled, bufferLength);
+          instance->m_state = WaitForAudio(instance, downsampled, buffer->length);
           break;
         case LISTENING:
           printf("listening...\n");
-          instance->m_state = Listen(instance, downsampled, bufferLength);
+          instance->m_state = Listen(instance, downsampled, buffer->length);
           break;
         case PROCESSING:
           printf("processing...\n");
@@ -236,6 +276,7 @@ class PocketSphinx : node::ObjectWrap {
             const char* uttid;
             int32       score;
             const char* hyp = ps_get_hyp(instance->m_ps, &score, &uttid);
+            Local<Object> output = Object::New();
 
             printf("Hyp: %s\n", hyp);
             output->Set(String::NewSymbol("hyp"), String::NewSymbol(hyp));
@@ -248,9 +289,12 @@ class PocketSphinx : node::ObjectWrap {
           break;
       }
 
+      printf("Deleting...");
       delete [] downsampled;
+      printf("Made it.");
 
       if (instance->m_state == FAILED) {
+        Local<Object> output = Object::New();
         output->Set(String::NewSymbol("error"), String::NewSymbol("An unrecoverable error occurred."));
         Local<Value> argv[1] = { output };
         instance->m_callback->Call(Context::GetCurrent()->Global(), 1, argv);

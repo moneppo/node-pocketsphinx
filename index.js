@@ -1,4 +1,4 @@
-var binding = require("./build/Release/binding");
+var binding = require("./build/Debug/binding");
 var util = require("util");
 var stream = require("stream");
 var spawn = require('child_process').spawn;

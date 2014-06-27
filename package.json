@@ -17,6 +17,7 @@
   "gypfile": true,
   "dependencies": {
     "express": "~4.3.2",
-    "socket.io": "~1.0.2"
+    "socket.io": "~1.0.2",
+    "segfault-handler": "~0.2.1"
   }
 }
