@@ -8,7 +8,7 @@
 	    	"OTHER_CFLAGS": ["<!(pkg-config --cflags pocketsphinx sphinxbase)"],
 	    	"OTHER_LDFLAGS": ["<!(pkg-config --libs pocketsphinx sphinxbase)"],
 			},
-      "sources": [ "src/node_pocketsphinx.cpp" ]
+      "sources": [ "src/binding.cpp" ]
     }
   ]
 }

@@ -3,8 +3,6 @@ var util = require("util");
 var stream = require("stream");
 var spawn = require('child_process').spawn;
 
-
-
 var PocketSphinx = function(options) {
 
 	var callback = function(result) {
@@ -29,16 +27,14 @@ var PocketSphinx = function(options) {
     	options.nfft = '' + (options.nfft || 2048);
     	// TODO: provide additional defaults
 
-    	self._binding = new binding.pocketSphinxBinding(options, callback);
+    	binding.Init(options, callback);
 	});
 }
 
 util.inherits(PocketSphinx, stream.Writable);
 
 PocketSphinx.prototype.write = function(chunk) {
-	if (this._binding) {
-		this._binding.writeData(chunk);
-	}
+	binding.writeDataAsync(chunk);
 };
 
 module.exports = PocketSphinx;
