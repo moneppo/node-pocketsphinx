@@ -3,6 +3,8 @@ pocketsphinx
 
 A Pocket Sphinx binding for Node.JS, focusing on continuous recognition.
 
+*This repo is experimental and out-of-date. I strongly recommend checking out the much better supported [cmupsphinx fork](http://github.com/cmusphinx/node-pocketsphinx).*
+
 Installing
 ----------
 
